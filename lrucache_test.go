@@ -1,62 +1,113 @@
 package lrucache
 
 import (
-	"fmt"
+	"testing"
 	"time"
 )
 
 const (
-	Expired = 5*time.Second
+	Expired = 5 * time.Second
 )
 
-func expectEntry(c *lrucache.LruCache, key interface{}) {
-	result, ok := c.Get(key)
-	fmt.Printf("key:%v,result:%v,ok:%v\n", key, result, ok)
-	if !ok {
-		fmt.Printf("key:%v not exit\n", key)
+func TestLruCache(t *testing.T) {
+	evictCounter := 0
+	onEvicted := func(k interface{}, v interface{}) {
+		evictCounter += 1
+	}
+	l, err := NewLRUCache(16, Expired, onEvicted)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	for i := 0; i < 32; i++ {
+		l.Put(i, i, Expired)
+	}
+	if l.Len() != 16 {
+		t.Fatalf("bad len: %v", l.Len())
+	}
+
+	if evictCounter != 16 {
+		t.Fatalf("bad evict count: %v", evictCounter)
+	}
+
+	for i, k := range l.Keys() {
+		if v, ok := l.Get(k); !ok || v != k || v != i+16 {
+			t.Fatalf("bad key: %v", k)
+		}
+	}
+	for i := 0; i < 16; i++ {
+		_, ok := l.Get(i)
+		if ok {
+			t.Fatalf("should be evicted")
+		}
+	}
+	for i := 16; i < 32; i++ {
+		_, ok := l.Get(i)
+		if !ok {
+			t.Fatalf("should not be evicted")
+		}
+	}
+	for i := 16; i < 24; i++ {
+		ok := l.Remove(i)
+		if !ok {
+			t.Fatalf("should be contained")
+		}
+		ok = l.Remove(i)
+		if ok {
+			t.Fatalf("should not be contained")
+		}
+		_, ok = l.Get(i)
+		if ok {
+			t.Fatalf("should be deleted")
+		}
+	}
+
+	l.Get(24)
+
+	l.Clear()
+	if l.Len() != 0 {
+		t.Fatalf("bad len: %v", l.Len())
+	}
+	if _, ok := l.Get(30); ok {
+		t.Fatalf("should contain nothing")
 	}
 }
 
-func keys(c *lrucache.LruCache) {
-	s := c.Keys()
-	for k, v := range s {
-		fmt.Printf("k:%v,v:%v,sv:%s\n", k, v, v.(string))
+// Test that put returns true/false if an eviction occurred
+func TestLRU_Put(t *testing.T) {
+	evictCounter := 0
+	onEvicted := func(k interface{}, v interface{}) {
+		evictCounter += 1
+		t.Logf("evict k:%v,v:%v", k, v)
+	}
+
+	l, err := NewLRUCache(1, Expired, onEvicted)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if l.Put(1, 1, Expired) == true || evictCounter != 0 {
+		t.Errorf("should not have an eviction")
+	}
+	if l.Put(2, 2, Expired) == false || evictCounter != 1 {
+		t.Errorf("should have an eviction")
 	}
 }
 
-func contains(c *lrucache.LruCache, key interface{}) {
-	b := c.Contains(key)
-	if b {
-		fmt.Println("contains key:", key)
-	} else {
-		fmt.Println("not contains key:", key)
+// Test that Contains doesn't update recent-ness
+func TestLRU_Contains(t *testing.T) {
+	l, err := NewLRUCache(1, Expired, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
 	}
-}
 
-func TestCache() {
-	var m time.Time = time.Now()
-	c := lrucache.NewLRUCache(4)
-	c.Put("elem1", "1", Expired)
-	c.Put("elem2", "2", 5*time.Second)
-	c.Put("elem3", "3", Expired)
-	c.Put("elem4", "4", 5*time.Second)
-	c.Put("elem5", "5", 5*time.Second)
-	expectEntry(c, "elem1")
-	expectEntry(c, "elem3")
-	c.Remove("elem4")
-	keys(c)
-	fmt.Println(c.Len())
-	time.Sleep(10 * time.Second)
-	var n time.Time = time.Now()
-	if n.After(m) {
-		fmt.Println("pass after 5")
+	l.Put(1, 1, Expired)
+	l.Put(2, 2, Expired)
+	if !l.Contains(2) {
+		t.Errorf("2 should be contained")
 	}
-	expectEntry(c, "elem3")
-	fmt.Println(c.Len())
-	expectEntry(c, "elem2")
-	fmt.Println(c.Len())
-	keys(c)
-	contains(c, "elem5")
-	c.Flush()
-	contains(c, "elem5")
+	l.Put(3, 3, Expired)
+	if l.Contains(1) {
+		t.Errorf("Contains should not have updated recent-ness of 1")
+	}
 }
